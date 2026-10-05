@@ -13,21 +13,21 @@ def match_pattern(input_line, pattern):
         return pattern in input_line
     
     # For \d character class
-    elif pattern == "\d":
+    elif pattern == r"\d":
         for char in input_line:
             if char.isdigit() :
                 return True           
         return False
 
     # For \w character class
-    elif pattern == "\w":
+    elif pattern == r"\w":
         for char in input_line:
             if char.isalnum() or char == "_" :
                 return True           
         return False 
 
     # For positive character group
-    elif pattern[0] == "[" and pattern[-1]=="]":
+    elif pattern[0] == "[" and pattern[-1]=="]" and pattern[1] != "^":
         pattern = pattern[1:]
         pattern = pattern[:-1]
         print(pattern)
@@ -40,7 +40,10 @@ def match_pattern(input_line, pattern):
 
     # For negative character group
     elif pattern[0] == "[" and pattern[-1]=="]" and pattern[1] == "^":
-        pass
+        for char in input_line:
+            if char not in pattern:
+                return True
+        return False
 
 
     else:
