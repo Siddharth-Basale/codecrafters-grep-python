@@ -5,14 +5,23 @@ import sys
 
 
 def match_pattern(input_line, pattern):
+    # First
     if len(pattern) == 1:
         return pattern in input_line
+    
+    # For \d Character Class
     elif pattern == "\d":
         for char in input_line:
             if char.isdigit() :
-                return True
-            
+                return True           
         return False
+
+    # For \w Character Class
+    elif pattern == "\w":
+        for char in input_line:
+            if char.isalnum() or char == "_" :
+                return True           
+        return False 
 
     else:
         raise RuntimeError(f"Unhandled pattern: {pattern}")
