@@ -38,6 +38,10 @@ def match_pattern(input_line, pattern):
 
         return False
 
+    # For negative character group
+    elif pattern[0] == "[" and pattern[-1]=="]" and pattern[1] == "^":
+        pass
+
 
     else:
         raise RuntimeError(f"Unhandled pattern: {pattern}")
