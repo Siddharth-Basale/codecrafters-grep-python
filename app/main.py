@@ -38,45 +38,52 @@ def match_char(char, token):
 
 
 def match_pattern(input_line, pattern):
-    is_anchored = False
-    
-    if pattern.endswith("$"):
-        pattern = pattern[:-1]
-        print(pattern)
-
-
-    if pattern.startswith("^"):
-        is_anchored = True
+    # 1. Detect anchors independently
+    match_from_start = pattern.startswith("^")
+    if match_from_start:
         pattern = pattern[1:]
+
+    match_to_end = pattern.endswith("$")
+    if match_to_end:
+        pattern = pattern[:-1]
+
     tokens = tokenize_pattern(pattern)
-    print(f"tokens are {tokens} and anchored is {is_anchored}" )
+
+    # Empty pattern handling
     if not tokens:
+        if match_to_end and match_from_start:
+            return len(input_line) == 0
         return True
-    if is_anchored:
+
+    # 2. Determine allowed start positions
+    if match_from_start:
         starting_indices = [0]
     else:
         starting_indices = range(len(input_line) + 1)
+
+    # 3. Slide through starting positions
     for start_idx in starting_indices:
         matched = True
         for t_idx in range(len(tokens)):
             current_char_idx = start_idx + t_idx
 
-
             if current_char_idx >= len(input_line):
                 matched = False
                 break
-
 
             if not match_char(input_line[current_char_idx], tokens[t_idx]):
                 matched = False
                 break
 
-
         if matched:
-            return True
+            # If $ is present, the match MUST reach the very end of input_line
+            if match_to_end:
+                if start_idx + len(tokens) == len(input_line):
+                    return True
+            else:
+                return True
 
     return False
-    
     
 
 
