@@ -38,12 +38,19 @@ def match_char(char, token):
 
 
 def match_pattern(input_line, pattern):
+    is_anchored = False
+    if pattern.startswith("^"):
+        is_anchored = True
+        pattern = pattern[1:]
     tokens = tokenize_pattern(pattern)
-    print(f"tokens are {tokens}" )
+    print(f"tokens are {tokens} and anchored is {is_anchored}" )
     if not tokens:
         return True
-
-    for start_idx in range(len(input_line) + 1):
+    if is_anchored:
+        starting_indices = [0]
+    else:
+        starting_indices = range(len(input_line) + 1)
+    for start_idx in starting_indices:
         matched = True
         for t_idx in range(len(tokens)):
             current_char_idx = start_idx + t_idx
