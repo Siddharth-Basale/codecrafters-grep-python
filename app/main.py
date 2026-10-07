@@ -39,6 +39,12 @@ def match_char(char, token):
 
 def match_pattern(input_line, pattern):
     is_anchored = False
+    
+    if pattern.endswith("$"):
+        pattern = pattern[:-1]
+        print(pattern)
+
+
     if pattern.startswith("^"):
         is_anchored = True
         pattern = pattern[1:]
