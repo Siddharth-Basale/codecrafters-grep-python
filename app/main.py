@@ -1,192 +1,165 @@
-import sys
 
-# import pyparsing - available if you need it!
-# import lark - available if you need it!
+import sys
 
 
 def tokenize_pattern(pattern):
     tokens = []
-    i = 0 
-    while i < len(pattern):
-        if pattern[i] == "\\" and i+1 < len(pattern):
-            tokens.append(pattern[i:i+2])
-            i+=2
+    i = 0
 
-        elif pattern[i] == "[":
-            end = pattern.find("]", i)
-            tokens.append(pattern[i : end + 1])
+    while i < len(pattern):
+        char = pattern[i]
+
+        if char == "\\":
+            if i + 1 >= len(pattern):
+                raise ValueError("Trailing escape")
+
+            tokens.append((pattern[i:i + 2], None))
+            i += 2
+
+        elif char == "[":
+            end = pattern.find("]", i + 1)
+
+            if end == -1:
+                raise ValueError("Unclosed character class")
+
+            tokens.append((pattern[i:end + 1], None))
             i = end + 1
 
-        elif(pattern[i] == "+"):
-            if pattern[i-2] == "\\":
-                tokens.pop()
-                tokens.append(pattern[i-2:i+1])
-            else:
-                tokens.pop()
-                tokens.append(pattern[i-1:i+1])
-            i+=1
+        elif char in "?+*":
+            if not tokens:
+                raise ValueError("Quantifier without preceding token")
+
+            base, quantifier = tokens[-1]
+
+            if quantifier is not None:
+                raise ValueError("Repeated quantifier")
+
+            tokens[-1] = (base, char)
+            i += 1
 
         else:
-            tokens.append(pattern[i])
-            i+=1
+            tokens.append((char, None))
+            i += 1
+
     return tokens
+
 
 def match_char(char, token):
     if token == r"\d":
         return char.isdigit()
-    elif token == r"\w":
+
+    if token == r"\w":
         return char.isalnum() or char == "_"
-    elif token.startswith("[^") and token.endswith("]"):
-        excluded = token[2:-1]
-        return char not in excluded
-    elif token.startswith("[") and token.endswith("]"):
-        included = token[1:-1]
-        return char in included
-    else:
-        return char == token
 
-def match_pattern(input_line, pattern):
-    print(f"input line: {input_line}")
-    print(f"pattern: {pattern}")
+    if token.startswith("[") and token.endswith("]"):
+        content = token[1:-1]
 
-    match_from_start = pattern.startswith("^")
-    if match_from_start:
+        if content.startswith("^"):
+            return char not in content[1:]
+
+        return char in content
+
+    if token.startswith("\\"):
+        return char == token[1:]
+
+    return char == token
+
+
+def match_tokens(text, tokens, token_idx, char_idx, memo):
+    state = (token_idx, char_idx)
+
+    if state in memo:
+        return memo[state]
+
+    if token_idx == len(tokens):
+        return char_idx
+
+    token, quantifier = tokens[token_idx]
+    result = None
+
+    if quantifier is None:
+        if char_idx < len(text) and match_char(text[char_idx], token):
+            result = match_tokens(
+                text, tokens, token_idx + 1,
+                char_idx + 1, memo
+            )
+
+    elif quantifier == "?":
+        # Greedily try one occurrence, then zero.
+        if char_idx < len(text) and match_char(text[char_idx], token):
+            result = match_tokens(
+                text, tokens, token_idx + 1,
+                char_idx + 1, memo
+            )
+
+        if result is None:
+            result = match_tokens(
+                text, tokens, token_idx + 1,
+                char_idx, memo
+            )
+
+    elif quantifier in ("+", "*"):
+        end = char_idx
+
+        while end < len(text) and match_char(text[end], token):
+            end += 1
+
+        minimum = char_idx + 1 if quantifier == "+" else char_idx
+
+        # Greedy matching with backtracking.
+        for candidate in range(end, minimum - 1, -1):
+            result = match_tokens(
+                text, tokens, token_idx + 1,
+                candidate, memo
+            )
+
+            if result is not None:
+                break
+
+    memo[state] = result
+    return result
+
+
+def match_pattern(text, pattern):
+    anchored_start = pattern.startswith("^")
+
+    if anchored_start:
         pattern = pattern[1:]
 
-    match_to_end = pattern.endswith("$")
-    if match_to_end:
+    anchored_end = pattern.endswith("$")
+
+    if anchored_end:
         pattern = pattern[:-1]
 
     tokens = tokenize_pattern(pattern)
-    print(f"tokens are {tokens}")
 
-    # Empty pattern handling
-    if not tokens:
-        if match_to_end and match_from_start:
-            return len(input_line) == 0
-        return True
+    starts = (0,) if anchored_start else range(len(text) + 1)
 
-    # Determine allowed start positions
-    if match_from_start:
-        starting_indices = [0]
-    else:
-        starting_indices = range(len(input_line) + 1)
+    for start in starts:
+        end = match_tokens(text, tokens, 0, start, {})
 
-    # Slide through starting positions
-    for start_idx in starting_indices:
-        matched = True
-        current_char_idx = start_idx
-        skip_remaining = False
-
-        for t_idx in range(len(tokens)):
-            if skip_remaining:
-                break
-
-            token = tokens[t_idx]
-
-            if current_char_idx >= len(input_line):
-                matched = False
-                break
-
-            if token.endswith("+"):
-                base_token = token[:-1]
-
-                if not match_char(input_line[current_char_idx], base_token):
-                    matched = False
-                    break
-
-                print("Bingo")
-
-                plus_start = current_char_idx
-
-                while (
-                    current_char_idx < len(input_line)
-                    and match_char(input_line[current_char_idx], base_token)
-                ):
-                    print(
-                        f"starcurrent_char_idx is: {current_char_idx} "
-                        f"and character to check is: {input_line[current_char_idx]}, "
-                        f"with token is {tokens[t_idx]}"
-                    )
-                    current_char_idx += 1
-
-                # Try the remaining tokens
-                while current_char_idx > plus_start:
-                    temp_idx = current_char_idx
-                    remaining_matched = True
-
-                    for next_idx in range(t_idx + 1, len(tokens)):
-                        next_token = tokens[next_idx]
-
-                        if temp_idx >= len(input_line):
-                            remaining_matched = False
-                            break
-
-                        if next_token.endswith("+"):
-                            next_base = next_token[:-1]
-
-                            if not match_char(input_line[temp_idx], next_base):
-                                remaining_matched = False
-                                break
-
-                            while (
-                                temp_idx < len(input_line)
-                                and match_char(input_line[temp_idx], next_base)
-                            ):
-                                temp_idx += 1
-
-                        else:
-                            if not match_char(input_line[temp_idx], next_token):
-                                remaining_matched = False
-                                break
-
-                            temp_idx += 1
-
-                    if remaining_matched:
-                        current_char_idx = temp_idx
-                        skip_remaining = True
-                        break
-
-                    current_char_idx -= 1
-
-                else:
-                    matched = False
-                    break
-
-            else:
-                if not match_char(input_line[current_char_idx], token):
-                    matched = False
-                    break
-
-                current_char_idx += 1
-
-        if matched:
-            if match_to_end:
-                if current_char_idx == len(input_line):
-                    return True
-            else:
+        if end is not None:
+            if not anchored_end or end == len(text):
                 return True
 
     return False
-    
 
 
 def main():
+    if len(sys.argv) != 3 or sys.argv[1] != "-E":
+        print("Usage: ./your_program.sh -E <pattern>", file=sys.stderr)
+        sys.exit(1)
+
     pattern = sys.argv[2]
-    input_line = sys.stdin.read()
+    text = sys.stdin.read()
 
-    if sys.argv[1] != "-E":
-        print("Expected first argument to be '-E'")
-        exit(1)
+    try:
+        matched = match_pattern(text, pattern)
+    except ValueError as error:
+        print(f"Invalid pattern: {error}", file=sys.stderr)
+        sys.exit(1)
 
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
-    print("Logs from your program will appear here!", file=sys.stderr)
-
-    # TODO: Uncomment the code below to pass the first stage
-    if match_pattern(input_line, pattern):
-        exit(0)
-    else:
-        exit(1)
+    sys.exit(0 if matched else 1)
 
 
 if __name__ == "__main__":
