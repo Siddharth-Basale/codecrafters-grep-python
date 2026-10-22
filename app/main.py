@@ -1,50 +1,96 @@
-
 import sys
 
 
-def tokenize_pattern(pattern):
-    tokens = []
-    i = 0
+def parse_tokens(pattern):
+    """
+    Parses a pattern string into a structured regex tree.
+    Supports:
+      - Literal characters
+      - Escaped characters (\\d, \\w, \\\\, etc.)
+      - Character classes ([abc], [^abc])
+      - Quantifiers (?, +, *)
+      - Alternation (|)
+      - Grouping ((...))
+    """
+    def parse_expr(i):
+        branches = []
+        current_seq = []
 
-    while i < len(pattern):
-        char = pattern[i]
+        while i < len(pattern):
+            char = pattern[i]
 
-        if char == "\\":
-            if i + 1 >= len(pattern):
-                raise ValueError("Trailing escape")
+            if char == "|":
+                branches.append(current_seq)
+                current_seq = []
+                i += 1
 
-            tokens.append((pattern[i:i + 2], None))
-            i += 2
+            elif char == ")":
+                branches.append(current_seq)
+                return ("ALT", branches), i + 1
 
-        elif char == "[":
-            end = pattern.find("]", i + 1)
+            elif char == "(":
+                sub_node, i = parse_expr(i + 1)
+                # Check for a trailing quantifier on the group: (abc)+, (cat|dog)?
+                quantifier = None
+                if i < len(pattern) and pattern[i] in "?+*":
+                    quantifier = pattern[i]
+                    i += 1
+                current_seq.append((sub_node, quantifier))
 
-            if end == -1:
-                raise ValueError("Unclosed character class")
+            elif char == "\\":
+                if i + 1 >= len(pattern):
+                    raise ValueError("Trailing escape")
+                tok = pattern[i:i + 2]
+                i += 2
+                quantifier = None
+                if i < len(pattern) and pattern[i] in "?+*":
+                    quantifier = pattern[i]
+                    i += 1
+                current_seq.append((("CHAR", tok), quantifier))
 
-            tokens.append((pattern[i:end + 1], None))
-            i = end + 1
+            elif char == "[":
+                end = pattern.find("]", i + 1)
+                if end == -1:
+                    raise ValueError("Unclosed character class")
+                tok = pattern[i:end + 1]
+                i = end + 1
+                quantifier = None
+                if i < len(pattern) and pattern[i] in "?+*":
+                    quantifier = pattern[i]
+                    i += 1
+                current_seq.append((("CHAR", tok), quantifier))
 
-        elif char in "?+*":
-            if not tokens:
+            elif char in "?+*":
                 raise ValueError("Quantifier without preceding token")
 
-            base, quantifier = tokens[-1]
+            elif char == ".":
+                i += 1
+                quantifier = None
+                if i < len(pattern) and pattern[i] in "?+*":
+                    quantifier = pattern[i]
+                    i += 1
+                current_seq.append((("CHAR", "."), quantifier))
 
-            if quantifier is not None:
-                raise ValueError("Repeated quantifier")
+            else:
+                tok = char
+                i += 1
+                quantifier = None
+                if i < len(pattern) and pattern[i] in "?+*":
+                    quantifier = pattern[i]
+                    i += 1
+                current_seq.append((("CHAR", tok), quantifier))
 
-            tokens[-1] = (base, char)
-            i += 1
+        branches.append(current_seq)
+        return ("ALT", branches), i
 
-        else:
-            tokens.append((char, None))
-            i += 1
-
-    return tokens
+    ast, _ = parse_expr(0)
+    return ast
 
 
 def match_char(char, token):
+    if token == ".":
+        return char != "\n"
+
     if token == r"\d":
         return char.isdigit()
 
@@ -53,10 +99,8 @@ def match_char(char, token):
 
     if token.startswith("[") and token.endswith("]"):
         content = token[1:-1]
-
         if content.startswith("^"):
             return char not in content[1:]
-
         return char in content
 
     if token.startswith("\\"):
@@ -65,80 +109,100 @@ def match_char(char, token):
     return char == token
 
 
-def match_tokens(text, tokens, token_idx, char_idx, memo):
-    state = (token_idx, char_idx)
+def match_node(node, text, char_idx):
+    """
+    Returns a set of possible character indices in text after matching `node`.
+    `node` is a tuple (node_type, data), e.g.:
+      - ("CHAR", token_str)
+      - ("ALT", list_of_sequences)
+    """
+    kind, data = node
 
-    if state in memo:
-        return memo[state]
+    if kind == "CHAR":
+        if char_idx < len(text) and match_char(text[char_idx], data):
+            return {char_idx + 1}
+        return set()
 
-    if token_idx == len(tokens):
-        return char_idx
+    if kind == "ALT":
+        branches = data
+        results = set()
+        for branch in branches:
+            results.update(match_sequence(branch, text, char_idx))
+        return results
 
-    token, quantifier = tokens[token_idx]
-    result = None
+    return set()
 
-    if quantifier is None:
-        if char_idx < len(text) and match_char(text[char_idx], token):
-            result = match_tokens(
-                text, tokens, token_idx + 1,
-                char_idx + 1, memo
-            )
 
-    elif quantifier == "?":
-        # Greedily try one occurrence, then zero.
-        if char_idx < len(text) and match_char(text[char_idx], token):
-            result = match_tokens(
-                text, tokens, token_idx + 1,
-                char_idx + 1, memo
-            )
+def match_sequence(seq, text, char_idx):
+    """
+    Matches an ordered list of (node, quantifier) elements.
+    Returns all valid ending character indices.
+    """
+    current_positions = {char_idx}
 
-        if result is None:
-            result = match_tokens(
-                text, tokens, token_idx + 1,
-                char_idx, memo
-            )
+    for item, quantifier in seq:
+        next_positions = set()
 
-    elif quantifier in ("+", "*"):
-        end = char_idx
+        for pos in current_positions:
+            if quantifier is None:
+                next_positions.update(match_node(item, text, pos))
 
-        while end < len(text) and match_char(text[end], token):
-            end += 1
+            elif quantifier == "?":
+                # 0 matches
+                next_positions.add(pos)
+                # 1 match
+                next_positions.update(match_node(item, text, pos))
 
-        minimum = char_idx + 1 if quantifier == "+" else char_idx
+            elif quantifier == "+":
+                # 1 or more matches
+                frontier = match_node(item, text, pos)
+                seen = set(frontier)
+                while frontier:
+                    nxt = set()
+                    for p in frontier:
+                        more = match_node(item, text, p) - seen
+                        nxt.update(more)
+                        seen.update(more)
+                    frontier = nxt
+                next_positions.update(seen)
 
-        # Greedy matching with backtracking.
-        for candidate in range(end, minimum - 1, -1):
-            result = match_tokens(
-                text, tokens, token_idx + 1,
-                candidate, memo
-            )
+            elif quantifier == "*":
+                # 0 or more matches
+                seen = {pos}
+                frontier = {pos}
+                while frontier:
+                    nxt = set()
+                    for p in frontier:
+                        more = match_node(item, text, p) - seen
+                        nxt.update(more)
+                        seen.update(more)
+                    frontier = nxt
+                next_positions.update(seen)
 
-            if result is not None:
-                break
+        current_positions = next_positions
+        if not current_positions:
+            return set()
 
-    memo[state] = result
-    return result
+    return current_positions
 
 
 def match_pattern(text, pattern):
     anchored_start = pattern.startswith("^")
-
     if anchored_start:
         pattern = pattern[1:]
 
     anchored_end = pattern.endswith("$")
-
     if anchored_end:
         pattern = pattern[:-1]
 
-    tokens = tokenize_pattern(pattern)
+    ast = parse_tokens(pattern)
 
-    starts = (0,) if anchored_start else range(len(text) + 1)
+    # Grep checks match per line or anywhere in the text
+    starts = [0] if anchored_start else range(len(text) + 1)
 
     for start in starts:
-        end = match_tokens(text, tokens, 0, start, {})
-
-        if end is not None:
+        ends = match_node(ast, text, start)
+        for end in ends:
             if not anchored_end or end == len(text):
                 return True
 
@@ -152,6 +216,10 @@ def main():
 
     pattern = sys.argv[2]
     text = sys.stdin.read()
+
+    # Strip single trailing newline if input came from echo without -n
+    if text.endswith("\n"):
+        text = text[:-1]
 
     try:
         matched = match_pattern(text, pattern)
